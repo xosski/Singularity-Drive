@@ -1,0 +1,101 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Quantum Bandit Red Team Toolkit</title>
+  <style>
+    body {
+      font-family: monospace;
+      background: #0d1117;
+      color: #c9d1d9;
+      padding: 2rem;
+    }
+
+    input,
+    textarea,
+    button {
+      width: 100%;
+      margin: 0.5rem 0;
+      padding: 0.5rem;
+      background: #161b22;
+      color: #fff;
+      border: 1px solid #30363d;
+    }
+
+    h1,
+    h2 {
+      color: #58a6ff;
+    }
+
+    pre {
+      background: #161b22;
+      padding: 1rem;
+      overflow-x: auto;
+    }
+  </style>
+</head>
+
+<body>
+  <h1>🧠 Quantum Bandit Red Team Toolkit</h1>
+
+  <h2>🔍 Recon - Nmap</h2>
+  <form id="reconForm">
+    <input type="text" id="target" placeholder="Target IP or domain..." required />
+    <button type="submit">Run Nmap Scan</button>
+  </form>
+  <pre id="reconResult"></pre>
+
+  <h2>💉 SQL Injection Test</h2>
+  <form id="exploitForm">
+    <input type="text" id="exploitTarget" placeholder="Target URL..." required />
+    <input type="text" id="payload" placeholder="SQL payload..." required />
+    <button type="submit">Send Exploit</button>
+  </form>
+  <pre id="exploitResult"></pre>
+
+  <h2>🎯 Payload Generator</h2>
+  <form id="payloadForm">
+    <input type="text" id="ip" placeholder="LHOST IP" required />
+    <input type="number" id="port" placeholder="LPORT" required />
+    <button type="submit">Generate Reverse Shell</button>
+  </form>
+  <pre id="payloadResult"></pre>
+
+  <script>
+    document.getElementById('reconForm').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const target = document.getElementById('target').value;
+      const res = await fetch('/recon', {
+        method: 'POST',
+        body: new URLSearchParams({ target })
+      });
+      const json = await res.json();
+      document.getElementById('reconResult').textContent = json.output || json.error;
+    });
+
+    document.getElementById('exploitForm').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const target = document.getElementById('exploitTarget').value;
+      const payload = document.getElementById('payload').value;
+      const res = await fetch('/exploit', {
+        method: 'POST',
+        body: new URLSearchParams({ target, payload })
+      });
+      const json = await res.json();
+      document.getElementById('exploitResult').textContent = json.response || json.error;
+    });
+
+    document.getElementById('payloadForm').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const ip = document.getElementById('ip').value;
+      const port = document.getElementById('port').value;
+      const res = await fetch(`/payload?ip=${ip}&port=${port}`);
+      const json = await res.json();
+      document.getElementById('payloadResult').textContent = json.payload || json.error;
+    });
+  </script>
+</body>
+
+</html>
