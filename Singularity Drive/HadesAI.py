@@ -505,6 +505,243 @@ class ExploitationEngine:
 
 
 # ============================================================================
+# NETWORK MONITOR - Active Defense System
+# ============================================================================
+
+class NetworkMonitor(QThread):
+    """Real-time network connection monitor with threat detection and active defense"""
+    connection_detected = pyqtSignal(dict)
+    threat_detected = pyqtSignal(dict)
+    status_update = pyqtSignal(str)
+    stats_update = pyqtSignal(dict)
+    
+    THREAT_PORTS = {
+        21: 'FTP', 22: 'SSH', 23: 'Telnet', 25: 'SMTP', 53: 'DNS',
+        135: 'RPC', 139: 'NetBIOS', 445: 'SMB', 1433: 'MSSQL', 1434: 'MSSQL-UDP',
+        3306: 'MySQL', 3389: 'RDP', 4444: 'Metasploit', 5432: 'PostgreSQL',
+        5900: 'VNC', 6379: 'Redis', 8080: 'HTTP-Alt', 27017: 'MongoDB',
+        31337: 'BackOrifice', 12345: 'NetBus', 54321: 'BackOrifice2K',
+    }
+    
+    MALICIOUS_IPS = set()
+    SUSPICIOUS_PATTERNS = [
+        'nmap', 'masscan', 'nikto', 'sqlmap', 'hydra', 'medusa',
+        'metasploit', 'cobalt', 'beacon', 'mimikatz', 'powershell -enc'
+    ]
+    
+    def __init__(self, kb: 'KnowledgeBase' = None):
+        super().__init__()
+        self.kb = kb
+        self.running = False
+        self.defense_mode = False
+        self.learning_mode = True
+        self.connection_history = []
+        self.threat_log = []
+        self.blocked_ips = set()
+        self.stats = {
+            'total_connections': 0,
+            'threats_detected': 0,
+            'attacks_blocked': 0,
+            'unique_ips': set(),
+            'start_time': None
+        }
+        
+    def run(self):
+        self.running = True
+        self.stats['start_time'] = datetime.now()
+        self.status_update.emit("🛡️ Network Monitor ACTIVE - Watching connections...")
+        
+        while self.running:
+            try:
+                connections = self._get_connections()
+                for conn in connections:
+                    self._analyze_connection(conn)
+                    
+                self._emit_stats()
+                time.sleep(1)
+            except Exception as e:
+                self.status_update.emit(f"Monitor error: {str(e)}")
+                time.sleep(5)
+                
+    def stop(self):
+        self.running = False
+        self.status_update.emit("🔴 Network Monitor STOPPED")
+        
+    def _get_connections(self) -> List[Dict]:
+        import psutil
+        connections = []
+        try:
+            for conn in psutil.net_connections(kind='inet'):
+                if conn.status == 'ESTABLISHED' or conn.status == 'LISTEN':
+                    conn_info = {
+                        'local_addr': f"{conn.laddr.ip}:{conn.laddr.port}" if conn.laddr else "N/A",
+                        'local_port': conn.laddr.port if conn.laddr else 0,
+                        'remote_addr': f"{conn.raddr.ip}:{conn.raddr.port}" if conn.raddr else "N/A",
+                        'remote_ip': conn.raddr.ip if conn.raddr else None,
+                        'remote_port': conn.raddr.port if conn.raddr else 0,
+                        'status': conn.status,
+                        'pid': conn.pid,
+                        'timestamp': datetime.now().isoformat()
+                    }
+                    
+                    if conn.pid:
+                        try:
+                            proc = psutil.Process(conn.pid)
+                            conn_info['process'] = proc.name()
+                            conn_info['cmdline'] = ' '.join(proc.cmdline()[:3])
+                        except:
+                            conn_info['process'] = 'Unknown'
+                            conn_info['cmdline'] = ''
+                    
+                    connections.append(conn_info)
+                    self.stats['total_connections'] += 1
+                    if conn_info['remote_ip']:
+                        self.stats['unique_ips'].add(conn_info['remote_ip'])
+        except Exception as e:
+            pass
+            
+        return connections
+        
+    def _analyze_connection(self, conn: Dict):
+        threat_level = 'SAFE'
+        threat_type = None
+        threat_details = []
+        
+        remote_port = conn.get('remote_port', 0)
+        remote_ip = conn.get('remote_ip')
+        local_port = conn.get('local_port', 0)
+        process = conn.get('process', '')
+        cmdline = conn.get('cmdline', '')
+        
+        if remote_ip in self.blocked_ips or remote_ip in self.MALICIOUS_IPS:
+            threat_level = 'CRITICAL'
+            threat_type = 'BLOCKED_IP'
+            threat_details.append(f"Connection from blocked IP: {remote_ip}")
+            
+        if remote_port in self.THREAT_PORTS:
+            if threat_level != 'CRITICAL':
+                threat_level = 'WARNING'
+            threat_type = threat_type or 'SUSPICIOUS_PORT'
+            threat_details.append(f"Connection to sensitive port: {remote_port} ({self.THREAT_PORTS[remote_port]})")
+            
+        if local_port in self.THREAT_PORTS and conn['status'] == 'LISTEN':
+            if threat_level == 'SAFE':
+                threat_level = 'WARNING'
+            threat_type = threat_type or 'OPEN_SENSITIVE_PORT'
+            threat_details.append(f"Listening on sensitive port: {local_port} ({self.THREAT_PORTS[local_port]})")
+            
+        for pattern in self.SUSPICIOUS_PATTERNS:
+            if pattern.lower() in cmdline.lower() or pattern.lower() in process.lower():
+                threat_level = 'HIGH'
+                threat_type = 'SUSPICIOUS_PROCESS'
+                threat_details.append(f"Suspicious process pattern: {pattern}")
+                break
+                
+        if remote_port in [4444, 5555, 6666, 7777, 8888, 9999, 31337, 12345]:
+            threat_level = 'HIGH'
+            threat_type = 'POTENTIAL_C2'
+            threat_details.append(f"Potential C2/backdoor port: {remote_port}")
+            
+        conn['threat_level'] = threat_level
+        conn['threat_type'] = threat_type
+        conn['threat_details'] = threat_details
+        
+        if threat_level != 'SAFE':
+            self.stats['threats_detected'] += 1
+            self.threat_log.append(conn)
+            self.threat_detected.emit(conn)
+            
+            if self.learning_mode and self.kb:
+                self._learn_from_threat(conn)
+                
+            if self.defense_mode and threat_level in ['HIGH', 'CRITICAL']:
+                self._counter_attack(conn)
+        else:
+            self.connection_detected.emit(conn)
+            
+        self.connection_history.append(conn)
+        if len(self.connection_history) > 1000:
+            self.connection_history = self.connection_history[-500:]
+            
+    def _learn_from_threat(self, conn: Dict):
+        if self.kb:
+            finding = ThreatFinding(
+                path=f"Network:{conn.get('remote_addr', 'Unknown')}",
+                threat_type=conn.get('threat_type', 'network_threat'),
+                pattern=f"Port:{conn.get('remote_port')} Process:{conn.get('process', 'Unknown')}",
+                severity=conn.get('threat_level', 'MEDIUM'),
+                code_snippet=str(conn.get('threat_details', [])),
+                browser='Network Monitor',
+                context=f"PID:{conn.get('pid')} CMD:{conn.get('cmdline', '')[:100]}"
+            )
+            self.kb.store_threat_finding(finding)
+            
+            if conn.get('remote_ip'):
+                self.MALICIOUS_IPS.add(conn['remote_ip'])
+                
+    def _counter_attack(self, conn: Dict):
+        remote_ip = conn.get('remote_ip')
+        if not remote_ip:
+            return
+            
+        self.blocked_ips.add(remote_ip)
+        self.stats['attacks_blocked'] += 1
+        
+        self.status_update.emit(f"⚔️ COUNTER: Blocked {remote_ip} - {conn.get('threat_type')}")
+        
+        try:
+            pid = conn.get('pid')
+            if pid:
+                import psutil
+                try:
+                    proc = psutil.Process(pid)
+                    if conn.get('threat_level') == 'CRITICAL':
+                        proc.terminate()
+                        self.status_update.emit(f"🔥 Terminated malicious process: {proc.name()} (PID: {pid})")
+                except:
+                    pass
+        except:
+            pass
+            
+    def _emit_stats(self):
+        runtime = datetime.now() - self.stats['start_time'] if self.stats['start_time'] else None
+        self.stats_update.emit({
+            'total_connections': self.stats['total_connections'],
+            'threats_detected': self.stats['threats_detected'],
+            'attacks_blocked': self.stats['attacks_blocked'],
+            'unique_ips': len(self.stats['unique_ips']),
+            'blocked_ips': len(self.blocked_ips),
+            'runtime': str(runtime).split('.')[0] if runtime else '00:00:00',
+            'defense_mode': self.defense_mode,
+            'learning_mode': self.learning_mode
+        })
+        
+    def set_defense_mode(self, enabled: bool):
+        self.defense_mode = enabled
+        mode = "ENABLED" if enabled else "DISABLED"
+        self.status_update.emit(f"🛡️ Active Defense {mode}")
+        
+    def set_learning_mode(self, enabled: bool):
+        self.learning_mode = enabled
+        mode = "ENABLED" if enabled else "DISABLED"
+        self.status_update.emit(f"🧠 Learning Mode {mode}")
+        
+    def block_ip(self, ip: str):
+        self.blocked_ips.add(ip)
+        self.status_update.emit(f"🚫 Manually blocked IP: {ip}")
+        
+    def unblock_ip(self, ip: str):
+        self.blocked_ips.discard(ip)
+        self.status_update.emit(f"✅ Unblocked IP: {ip}")
+        
+    def get_threat_log(self) -> List[Dict]:
+        return self.threat_log[-100:]
+        
+    def get_blocked_ips(self) -> List[str]:
+        return list(self.blocked_ips)
+
+
+# ============================================================================
 # REQUEST INJECTION ENGINE
 # ============================================================================
 
@@ -1242,17 +1479,19 @@ class BrowserScanner(QThread):
 
 class ChatProcessor:
     COMMANDS = {
-        'scan': ['scan ports', 'port scan', 'nmap'],
+        'full_scan': ['scan https://', 'scan http://', 'full scan', 'recon ', 'go to work on', 'attack '],
+        'scan': ['scan ports', 'port scan', 'nmap', 'scan ports on'],
         'bruteforce': ['bruteforce', 'brute force', 'dir scan', 'directory bruteforce'],
         'subdomain': ['subdomain', 'subdomains', 'enum sub', 'find subdomains'],
         'banner': ['banner', 'grab banner', 'service detection'],
         'vuln': ['vuln scan', 'vulnerability scan', 'scan for vulnerabilities', 'find vulnerabilities'],
         'learn': ['learn from', 'study', 'analyze url'],
         'cache': ['scan cache', 'browser cache', 'cache scan', 'scan browser'],
-        'help': ['help', 'commands', 'what can you do'],
+        'help': ['help', 'commands', 'what can you do', '?'],
         'status': ['status', 'stats', 'statistics', 'show stats'],
         'show_exploits': ['show exploits', 'show learned exploits', 'list exploits', 'learned exploits', 'view exploits'],
         'show_findings': ['show findings', 'show threats', 'list findings', 'threat findings', 'view findings'],
+        'greeting': ['hello', 'hi ', 'hey', 'how are you', 'whats up', "what's up"],
     }
     
     def __init__(self, kb: KnowledgeBase):
@@ -1285,20 +1524,51 @@ class ChatProcessor:
         
         target = url_match.group() if url_match else (ip_match.group() if ip_match else (domain_match.group() if domain_match else None))
         
+        if cmd == 'greeting':
+            greetings = [
+                "Hey there! I'm HADES, your AI pentesting assistant. Ready to hunt some vulnerabilities? 🔥",
+                "Hello! HADES online and ready. What target shall we analyze today?",
+                "Greetings! I'm operational and eager to find security weaknesses. Give me a target!",
+                "Hey! I'm doing great, always ready to scan and exploit. What's our mission?",
+            ]
+            import random
+            return {'response': random.choice(greetings), 'action': None}
+        
         if cmd == 'help':
             return {
-                'response': """I can help you with:
-• **Port Scan**: "scan ports on 192.168.1.1" or "scan example.com"
-• **Directory Bruteforce**: "bruteforce http://target.com"
-• **Subdomain Enum**: "find subdomains of example.com"
-• **Banner Grab**: "grab banners from 192.168.1.1"
-• **Vuln Scan**: "scan for vulnerabilities on http://target.com"
-• **Learn from URL**: "learn from https://exploit-db.com/..."
-• **Cache Scan**: "scan browser cache"
-• **Statistics**: "show stats"
+                'response': """🔥 **HADES AI - Commands:**
 
-Just tell me what you want to do and provide a target!""",
+**Scanning:**
+• "scan https://example.com" - Full reconnaissance scan
+• "scan ports on 192.168.1.1" - Port scan
+• "vuln scan http://target.com" - Vulnerability scan
+
+**Reconnaissance:**
+• "find subdomains of example.com" - Subdomain enumeration  
+• "bruteforce http://target.com" - Directory bruteforce
+
+**Learning:**
+• "learn from https://exploit-db.com/..." - Learn exploits from URL
+• "scan browser cache" - Analyze cached files for threats
+
+**View Data:**
+• "show stats" - View statistics
+• "show exploits" - View learned exploits
+• "show findings" - View threat findings
+
+Just give me a URL or IP and I'll get to work!""",
                 'action': None
+            }
+        
+        if cmd == 'full_scan':
+            if not target:
+                return {
+                    'response': "I need a target URL or domain for a full scan. Try: 'scan https://example.com'",
+                    'action': None
+                }
+            return {
+                'response': f"🚀 **Initiating full reconnaissance on {target}**\n\nThis will:\n• Learn from the target URL\n• Check for exposed paths\n• Analyze security headers\n• Look for vulnerabilities\n\nStand by for results...",
+                'action': {'type': 'full_scan', 'target': target}
             }
             
         if cmd == 'status':
@@ -1340,22 +1610,35 @@ Just tell me what you want to do and provide a target!""",
     def _generate_response(self, message: str) -> Dict:
         exploits = self.kb.get_learned_exploits(5)
         patterns = self.kb.get_patterns()
+        message_lower = message.lower()
         
-        response = "I'm your AI pentesting assistant. "
+        # Check if message contains a URL or domain - probably wants to scan it
+        url_match = re.search(r'https?://[^\s]+', message)
+        domain_match = re.search(r'\b(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,}\b', message, re.IGNORECASE)
         
-        if 'what' in message.lower() and 'learn' in message.lower():
+        if url_match or domain_match:
+            target = url_match.group() if url_match else domain_match.group()
+            response = f"I detected a target: **{target}**\n\nWould you like me to scan it? Try:\n• 'scan {target}' - Full reconnaissance\n• 'learn from {target}' - Extract exploit patterns\n• 'vuln scan {target}' - Vulnerability scan"
+            self.kb.store_chat('assistant', response)
+            return {'response': response, 'action': None}
+        
+        if 'what' in message_lower and 'learn' in message_lower:
             response = f"I've learned {len(patterns)} security patterns and {len(exploits)} exploits from various sources. "
             if exploits:
                 response += f"Recent learnings include exploits from: {', '.join(set(e['source_url'][:30] for e in exploits[:3]))}"
-        elif 'exploit' in message.lower():
+        elif 'exploit' in message_lower:
             if exploits:
                 response = "Here are some exploits I've learned:\n"
                 for e in exploits[:3]:
                     response += f"\n• **{e['exploit_type']}** from {e['source_url'][:40]}:\n```\n{e['code'][:150]}\n```\n"
             else:
                 response = "I haven't learned any exploits yet. Point me to a URL with exploit code using 'learn from https://...'"
+        elif 'who' in message_lower and 'you' in message_lower:
+            response = "I'm HADES - a self-learning AI pentesting assistant. I can scan targets, learn exploit patterns, analyze browser caches, and help you find vulnerabilities. Type 'help' to see what I can do!"
+        elif 'thank' in message_lower:
+            response = "You're welcome! Ready for the next target whenever you are. 🔥"
         else:
-            response += "Tell me what you'd like to do - scan a target, learn from a website, or analyze cached browser data. Type 'help' for commands."
+            response = "I'm not sure what you want me to do. Try:\n\n• **'scan https://example.com'** - Run a full scan\n• **'help'** - See all commands\n• **'show stats'** - View my statistics\n\nOr just give me a URL/IP and I'll figure out what to do with it!"
             
         self.kb.store_chat('assistant', response)
         return {'response': response, 'action': None}
@@ -2263,6 +2546,7 @@ class HadesGUI(QMainWindow):
         self.ai = HadesAI()
         self.scanner = None
         self.tool_executor = None
+        self.network_monitor = None
         self.init_ui()
         
     def init_ui(self):
@@ -2278,6 +2562,7 @@ class HadesGUI(QMainWindow):
         layout.addWidget(self.tabs)
         
         self.tabs.addTab(self._create_chat_tab(), "💬 AI Chat")
+        self.tabs.addTab(self._create_network_monitor_tab(), "🛡️ Network Monitor")
         self.tabs.addTab(self._create_tools_tab(), "🛠️ Tools & Targets")
         self.tabs.addTab(self._create_exploit_tab(), "⚔️ Active Exploit")
         self.tabs.addTab(self._create_injection_tab(), "💉 Request Injection")
@@ -2357,6 +2642,242 @@ class HadesGUI(QMainWindow):
         layout.addLayout(quick_layout)
         
         return widget
+    
+    def _create_network_monitor_tab(self) -> QWidget:
+        widget = QWidget()
+        layout = QVBoxLayout(widget)
+        
+        # Control Panel
+        control_group = QGroupBox("🛡️ Network Defense Control")
+        control_layout = QHBoxLayout(control_group)
+        
+        self.monitor_start_btn = QPushButton("▶ Start Monitor")
+        self.monitor_start_btn.clicked.connect(self._start_network_monitor)
+        self.monitor_start_btn.setStyleSheet("background: #4CAF50;")
+        control_layout.addWidget(self.monitor_start_btn)
+        
+        self.monitor_stop_btn = QPushButton("⏹ Stop Monitor")
+        self.monitor_stop_btn.clicked.connect(self._stop_network_monitor)
+        self.monitor_stop_btn.setEnabled(False)
+        self.monitor_stop_btn.setStyleSheet("background: #f44336;")
+        control_layout.addWidget(self.monitor_stop_btn)
+        
+        control_layout.addWidget(QLabel("  |  "))
+        
+        self.defense_mode_check = QCheckBox("⚔️ Active Defense (Auto-block & counter)")
+        self.defense_mode_check.setStyleSheet("color: #ff6b6b; font-weight: bold;")
+        self.defense_mode_check.toggled.connect(self._toggle_defense_mode)
+        control_layout.addWidget(self.defense_mode_check)
+        
+        self.learning_mode_check = QCheckBox("🧠 Learning Mode")
+        self.learning_mode_check.setChecked(True)
+        self.learning_mode_check.setStyleSheet("color: #4CAF50;")
+        self.learning_mode_check.toggled.connect(self._toggle_learning_mode)
+        control_layout.addWidget(self.learning_mode_check)
+        
+        control_layout.addStretch()
+        layout.addWidget(control_group)
+        
+        # Stats Panel
+        stats_group = QGroupBox("📊 Real-Time Statistics")
+        stats_layout = QHBoxLayout(stats_group)
+        
+        self.net_stats_labels = {}
+        stat_items = [
+            ('runtime', 'Runtime', '00:00:00'),
+            ('total_connections', 'Connections', '0'),
+            ('threats_detected', 'Threats', '0'),
+            ('attacks_blocked', 'Blocked', '0'),
+            ('unique_ips', 'Unique IPs', '0'),
+            ('blocked_ips', 'Blocked IPs', '0'),
+        ]
+        
+        for key, label, default in stat_items:
+            frame = QGroupBox(label)
+            frame_layout = QVBoxLayout(frame)
+            stat_label = QLabel(default)
+            stat_label.setFont(QFont("Consolas", 16, QFont.Weight.Bold))
+            stat_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            if 'threat' in key or 'blocked' in key:
+                stat_label.setStyleSheet("color: #ff6b6b;")
+            else:
+                stat_label.setStyleSheet("color: #00fff2;")
+            frame_layout.addWidget(stat_label)
+            self.net_stats_labels[key] = stat_label
+            stats_layout.addWidget(frame)
+            
+        layout.addWidget(stats_group)
+        
+        # Main content splitter
+        splitter = QSplitter(Qt.Orientation.Horizontal)
+        
+        # Connection Log
+        conn_group = QGroupBox("🌐 Live Connections")
+        conn_layout = QVBoxLayout(conn_group)
+        self.connection_table = QTableWidget()
+        self.connection_table.setColumnCount(6)
+        self.connection_table.setHorizontalHeaderLabels(["Time", "Remote", "Local Port", "Process", "Status", "Threat"])
+        self.connection_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
+        self.connection_table.setAlternatingRowColors(True)
+        conn_layout.addWidget(self.connection_table)
+        splitter.addWidget(conn_group)
+        
+        # Threat Log
+        threat_group = QGroupBox("⚠️ Threat Detections")
+        threat_layout = QVBoxLayout(threat_group)
+        self.threat_table = QTableWidget()
+        self.threat_table.setColumnCount(5)
+        self.threat_table.setHorizontalHeaderLabels(["Time", "IP", "Type", "Level", "Details"])
+        self.threat_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
+        self.threat_table.setAlternatingRowColors(True)
+        threat_layout.addWidget(self.threat_table)
+        splitter.addWidget(threat_group)
+        
+        layout.addWidget(splitter)
+        
+        # Manual Controls
+        manual_group = QGroupBox("🔧 Manual Controls")
+        manual_layout = QHBoxLayout(manual_group)
+        
+        manual_layout.addWidget(QLabel("IP Address:"))
+        self.block_ip_input = QLineEdit()
+        self.block_ip_input.setPlaceholderText("Enter IP to block...")
+        manual_layout.addWidget(self.block_ip_input)
+        
+        block_btn = QPushButton("🚫 Block IP")
+        block_btn.clicked.connect(self._manual_block_ip)
+        block_btn.setStyleSheet("background: #f44336;")
+        manual_layout.addWidget(block_btn)
+        
+        unblock_btn = QPushButton("✅ Unblock IP")
+        unblock_btn.clicked.connect(self._manual_unblock_ip)
+        unblock_btn.setStyleSheet("background: #4CAF50;")
+        manual_layout.addWidget(unblock_btn)
+        
+        clear_threats_btn = QPushButton("🗑️ Clear Threats")
+        clear_threats_btn.clicked.connect(self._clear_threat_log)
+        clear_threats_btn.setStyleSheet("background: #0f3460;")
+        manual_layout.addWidget(clear_threats_btn)
+        
+        manual_layout.addStretch()
+        layout.addWidget(manual_group)
+        
+        # Status bar for network monitor
+        self.net_status_label = QLabel("🔴 Network Monitor INACTIVE - Click Start to begin monitoring")
+        self.net_status_label.setStyleSheet("padding: 10px; background: #0f3460; border-radius: 5px; font-size: 12px;")
+        layout.addWidget(self.net_status_label)
+        
+        return widget
+    
+    def _start_network_monitor(self):
+        if self.network_monitor and self.network_monitor.isRunning():
+            return
+            
+        self.network_monitor = NetworkMonitor(self.ai.kb)
+        self.network_monitor.connection_detected.connect(self._on_connection_detected)
+        self.network_monitor.threat_detected.connect(self._on_threat_detected)
+        self.network_monitor.status_update.connect(self._on_monitor_status)
+        self.network_monitor.stats_update.connect(self._on_stats_update)
+        
+        self.network_monitor.set_defense_mode(self.defense_mode_check.isChecked())
+        self.network_monitor.set_learning_mode(self.learning_mode_check.isChecked())
+        
+        self.network_monitor.start()
+        
+        self.monitor_start_btn.setEnabled(False)
+        self.monitor_stop_btn.setEnabled(True)
+        self._add_chat_message("system", "🛡️ Network Monitor ACTIVATED - Watching for threats...")
+        
+    def _stop_network_monitor(self):
+        if self.network_monitor:
+            self.network_monitor.stop()
+            self.network_monitor.wait()
+            
+        self.monitor_start_btn.setEnabled(True)
+        self.monitor_stop_btn.setEnabled(False)
+        self.net_status_label.setText("🔴 Network Monitor STOPPED")
+        self._add_chat_message("system", "🔴 Network Monitor stopped")
+        
+    def _toggle_defense_mode(self, enabled: bool):
+        if self.network_monitor:
+            self.network_monitor.set_defense_mode(enabled)
+        mode = "ENABLED" if enabled else "DISABLED"
+        self._add_chat_message("system", f"⚔️ Active Defense Mode {mode}")
+        
+    def _toggle_learning_mode(self, enabled: bool):
+        if self.network_monitor:
+            self.network_monitor.set_learning_mode(enabled)
+            
+    def _on_connection_detected(self, conn: dict):
+        row = self.connection_table.rowCount()
+        if row >= 100:
+            self.connection_table.removeRow(0)
+            row = 99
+        self.connection_table.insertRow(row)
+        
+        self.connection_table.setItem(row, 0, QTableWidgetItem(conn.get('timestamp', '')[-8:]))
+        self.connection_table.setItem(row, 1, QTableWidgetItem(conn.get('remote_addr', 'N/A')[:25]))
+        self.connection_table.setItem(row, 2, QTableWidgetItem(str(conn.get('local_port', ''))))
+        self.connection_table.setItem(row, 3, QTableWidgetItem(conn.get('process', 'Unknown')[:15]))
+        self.connection_table.setItem(row, 4, QTableWidgetItem(conn.get('status', '')))
+        
+        threat = conn.get('threat_level', 'SAFE')
+        threat_item = QTableWidgetItem(threat)
+        if threat == 'SAFE':
+            threat_item.setForeground(QColor('#4CAF50'))
+        self.connection_table.setItem(row, 5, threat_item)
+        
+        self.connection_table.scrollToBottom()
+        
+    def _on_threat_detected(self, conn: dict):
+        row = self.threat_table.rowCount()
+        self.threat_table.insertRow(row)
+        
+        self.threat_table.setItem(row, 0, QTableWidgetItem(conn.get('timestamp', '')[-8:]))
+        self.threat_table.setItem(row, 1, QTableWidgetItem(conn.get('remote_ip', 'N/A')))
+        self.threat_table.setItem(row, 2, QTableWidgetItem(conn.get('threat_type', 'Unknown')))
+        
+        level = conn.get('threat_level', 'WARNING')
+        level_item = QTableWidgetItem(level)
+        colors = {'CRITICAL': '#ff0000', 'HIGH': '#ff6b6b', 'WARNING': '#ffa500'}
+        level_item.setForeground(QColor(colors.get(level, '#ffa500')))
+        self.threat_table.setItem(row, 3, level_item)
+        
+        details = ', '.join(conn.get('threat_details', []))[:50]
+        self.threat_table.setItem(row, 4, QTableWidgetItem(details))
+        
+        self.threat_table.scrollToBottom()
+        
+        # Also add to chat
+        self._add_chat_message("threat", f"⚠️ [{level}] {conn.get('threat_type')}: {conn.get('remote_addr')} - {details}")
+        
+    def _on_monitor_status(self, status: str):
+        self.net_status_label.setText(status)
+        
+    def _on_stats_update(self, stats: dict):
+        for key, value in stats.items():
+            if key in self.net_stats_labels:
+                self.net_stats_labels[key].setText(str(value))
+                
+    def _manual_block_ip(self):
+        ip = self.block_ip_input.text().strip()
+        if ip and self.network_monitor:
+            self.network_monitor.block_ip(ip)
+            self.block_ip_input.clear()
+            self._add_chat_message("system", f"🚫 Manually blocked IP: {ip}")
+            
+    def _manual_unblock_ip(self):
+        ip = self.block_ip_input.text().strip()
+        if ip and self.network_monitor:
+            self.network_monitor.unblock_ip(ip)
+            self.block_ip_input.clear()
+            self._add_chat_message("system", f"✅ Unblocked IP: {ip}")
+            
+    def _clear_threat_log(self):
+        self.threat_table.setRowCount(0)
+        if self.network_monitor:
+            self.network_monitor.threat_log.clear()
+        self._add_chat_message("system", "🗑️ Threat log cleared")
         
     def _create_tools_tab(self) -> QWidget:
         widget = QWidget()
@@ -2809,23 +3330,73 @@ class HadesGUI(QMainWindow):
         target = action.get('target')
         
         if action_type == 'cache_scan':
-            self.tabs.setCurrentIndex(4)
+            self.tabs.setCurrentIndex(10)  # Cache Scanner tab
             self._start_cache_scan()
+        elif action_type == 'full_scan' and target:
+            self._add_chat_message('tool', f"🚀 Starting full reconnaissance on {target}...")
+            self._run_full_scan(target)
         elif action_type == 'web_learn' and target:
-            self._add_chat_message('tool', f"Learning from {target}...")
+            self._add_chat_message('tool', f"📚 Learning from {target}...")
             result = self.ai.learn_from_url(target)
             if result.get('error'):
-                self._add_chat_message('tool', f"Error: {result['error']}")
+                self._add_chat_message('tool', f"❌ Error: {result['error']}")
             else:
-                self._add_chat_message('tool', f"Learned {result.get('exploits_learned', 0)} exploits!")
+                self._add_chat_message('tool', f"✅ Learned {result.get('exploits_learned', 0)} exploits!")
                 self._refresh_learned()
         elif target:
             self.target_input.setText(target)
             tool_map = {'port_scan': 0, 'dir_bruteforce': 1, 'subdomain_enum': 2, 'banner_grab': 3, 'vuln_scan': 4}
             if action_type in tool_map:
                 self.tool_combo.setCurrentIndex(tool_map[action_type])
-            self.tabs.setCurrentIndex(1)
+            self.tabs.setCurrentIndex(2)  # Tools tab (after Network Monitor)
             self._run_tool()
+            
+    def _run_full_scan(self, target: str):
+        """Run full reconnaissance scan in background thread"""
+        class FullScanThread(QThread):
+            update = pyqtSignal(str)
+            finished_scan = pyqtSignal(dict)
+            
+            def __init__(self, ai, target):
+                super().__init__()
+                self.ai = ai
+                self.target = target
+                
+            def run(self):
+                def callback(msg):
+                    self.update.emit(msg)
+                    
+                result = self.ai.full_site_scan(self.target, callback)
+                self.finished_scan.emit(result)
+        
+        self.full_scan_thread = FullScanThread(self.ai, target)
+        self.full_scan_thread.update.connect(lambda msg: self._add_chat_message('tool', msg))
+        self.full_scan_thread.finished_scan.connect(self._on_full_scan_complete)
+        self.full_scan_thread.start()
+        
+    def _on_full_scan_complete(self, result: dict):
+        vulns = result.get('vulnerabilities', [])
+        exploits = result.get('exploits_learned', 0)
+        
+        summary = f"""
+🏁 **Scan Complete!**
+
+**Target:** {result.get('target', 'Unknown')}
+**Vulnerabilities Found:** {len(vulns)}
+**Exploits Learned:** {exploits}
+**Status:** {result.get('status', 'completed')}
+"""
+        
+        if vulns:
+            summary += "\n**Findings:**\n"
+            for v in vulns[:5]:
+                summary += f"• [{v.get('severity', 'INFO')}] {v.get('type', 'Unknown')}: {v.get('path', v.get('header', 'N/A'))}\n"
+            if len(vulns) > 5:
+                summary += f"...and {len(vulns) - 5} more\n"
+                
+        self._add_chat_message('assistant', summary)
+        self._refresh_findings()
+        self._refresh_learned()
             
     # ========== Tool Methods ==========
     
