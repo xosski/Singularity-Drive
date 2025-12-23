@@ -1,6 +1,8 @@
 """
 HadesAI - Self-Learning Pentesting & Code Analysis AI
 With Interactive Chat, Web Learning, and Tool Execution
+
+💝 Support Development: https://buy.stripe.com/28EbJ1f7ceo3ckyeES5kk00
 """
 
 import os

@@ -1,0 +1,397 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+    <title>HADES AI Command Bridge</title>
+    <link rel="stylesheet" href="/static/css/bridge.css">
+    <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;500;700&display=swap" rel="stylesheet">
+    <style>
+        .hades-tools { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin-top: 10px; }
+        .hades-tools button { padding: 8px; font-size: 12px; }
+        .tool-input { display: flex; gap: 10px; margin-top: 10px; }
+        .tool-input input { flex: 1; padding: 8px; background: rgba(0,0,0,0.5); border: 1px solid #e94560; color: #fff; border-radius: 5px; }
+        .findings-list { max-height: 200px; overflow-y: auto; font-size: 12px; }
+        .finding-item { padding: 5px; border-left: 3px solid #e94560; margin: 5px 0; background: rgba(233,69,96,0.1); }
+        .finding-item.high { border-color: #ff0000; }
+        .finding-item.medium { border-color: #ffa500; }
+        .finding-item.low { border-color: #00ff00; }
+        .quick-actions { display: flex; gap: 5px; flex-wrap: wrap; margin-top: 10px; }
+        .quick-actions button { font-size: 11px; padding: 5px 10px; background: #0f3460; }
+        .clear-btn { background: #444 !important; }
+    </style>
+</head>
+
+<body>
+    <div style="display: flex; justify-content: space-between; align-items: center; padding: 0 20px;">
+        <h1>🔥 HADES AI Command Center 🔥</h1>
+        <a href="https://buy.stripe.com/28EbJ1f7ceo3ckyeES5kk00" target="_blank" 
+           style="color: #fff; background: linear-gradient(135deg, #e94560, #ff6b6b); padding: 12px 24px; 
+                  border-radius: 25px; text-decoration: none; font-family: 'Orbitron', monospace; 
+                  font-weight: bold; box-shadow: 0 0 20px rgba(233, 69, 96, 0.5); transition: all 0.3s ease;"
+           onmouseover="this.style.boxShadow='0 0 30px rgba(233, 69, 96, 0.8)'" 
+           onmouseout="this.style.boxShadow='0 0 20px rgba(233, 69, 96, 0.5)'">
+            💝 Support Development
+        </a>
+    </div>
+
+    <div class="bridge-container">
+        <div class="module system-status">
+            <h2>System Status</h2>
+            <div class="metrics">
+                <div>
+                    <span class="status-indicator {{ 'status-online' if metrics.cpu_usage < 80 else 'status-offline' }}"></span>
+                    <span id="cpu-usage">CPU: {{ metrics.cpu_usage }}%</span>
+                </div>
+                <div>
+                    <span class="status-indicator {{ 'status-online' if metrics.memory_usage < 90 else 'status-offline' }}"></span>
+                    <span id="memory-usage">Memory: {{ metrics.memory_usage }}%</span>
+                </div>
+                <div class="performance-metrics">
+                    <span id="operational-efficiency">Efficiency: {{ "%.2f"|format(metrics.operational_efficiency) }}%</span>
+                    <span id="system-load">Load: {{ metrics.system_load.current_load }}</span>
+                </div>
+            </div>
+        </div>
+
+        <div class="module ai-core">
+            <h2>🔥 HADES AI Engine</h2>
+            <div class="metrics">
+                <div>Status: <span id="ai-status" style="color: #00ff00;">{{ ai_status.status }}</span></div>
+                <div>Engine: <span style="color: #e94560;">HadesAI</span></div>
+                <div>Uptime: <span id="uptime">{{ ai_status.uptime.formatted }}</span></div>
+                <div class="ai-controls">
+                    <button onclick="startAI()">Start HADES</button>
+                    <button onclick="scanCache()">Scan Cache</button>
+                    <button onclick="showExploits()">View Exploits</button>
+                </div>
+            </div>
+        </div>
+
+        <div class="module ai-chat">
+            <h2>💬 HADES Chat Interface</h2>
+            <div class="chat-container">
+                <div id="chat-messages" class="chat-messages"></div>
+                <div class="chat-input-container">
+                    <input type="text" id="chat-input" placeholder="Talk to HADES... (e.g., 'scan ports on 192.168.1.1')" onkeypress="handleChatKeyPress(event)">
+                    <button onclick="sendChatMessage()">Send</button>
+                    <button onclick="clearChat()" class="clear-btn">Clear</button>
+                </div>
+                <div class="quick-actions">
+                    <button onclick="quickCommand('help')">Help</button>
+                    <button onclick="quickCommand('show stats')">Stats</button>
+                    <button onclick="quickCommand('scan browser cache')">Scan Cache</button>
+                    <button onclick="quickCommand('show learned exploits')">Exploits</button>
+                </div>
+            </div>
+        </div>
+
+        <div class="module hades-tools-panel">
+            <h2>🛠️ HADES Tools</h2>
+            <div class="tool-input">
+                <input type="text" id="tool-target" placeholder="Target (IP/URL)...">
+                <select id="tool-select">
+                    <option value="port_scan">Port Scan</option>
+                    <option value="dir_bruteforce">Dir Bruteforce</option>
+                    <option value="subdomain_enum">Subdomain Enum</option>
+                    <option value="vuln_scan">Vuln Scan</option>
+                    <option value="web_learn">Learn from URL</option>
+                </select>
+                <button onclick="runHadesTool()">Run</button>
+            </div>
+            <div class="hades-tools">
+                <button onclick="runQuickTool('port_scan')">🔍 Port Scan</button>
+                <button onclick="runQuickTool('vuln_scan')">⚠️ Vuln Scan</button>
+                <button onclick="runQuickTool('web_learn')">📚 Learn URL</button>
+            </div>
+        </div>
+
+        <div class="module auto-recon-panel">
+            <h2>🚀 Auto Recon</h2>
+            <p style="font-size: 11px; color: #888; margin-bottom: 10px;">Run comprehensive automated reconnaissance on any target</p>
+            <div class="tool-input">
+                <input type="text" id="recon-target" placeholder="Enter URL (e.g., https://example.com)...">
+                <button onclick="startFullScan()" id="recon-btn" style="background: linear-gradient(45deg, #e94560, #ff6b6b);">
+                    🚀 GO TO WORK
+                </button>
+            </div>
+            <div id="recon-progress" style="display: none; margin-top: 10px;">
+                <div style="color: #ffa500;">⏳ Scanning in progress...</div>
+                <div id="recon-log" class="findings-list" style="max-height: 150px; margin-top: 5px; font-size: 11px;"></div>
+            </div>
+            <div id="recon-results" style="display: none; margin-top: 10px;">
+                <div style="color: #00ff00;">✅ Scan Complete</div>
+                <div id="recon-summary" style="font-size: 12px; margin-top: 5px;"></div>
+            </div>
+        </div>
+
+        <div class="module export-panel">
+            <h2>📄 Export Reports</h2>
+            <p style="font-size: 11px; color: #888; margin-bottom: 10px;">Export findings to professional PDF report</p>
+            <div style="display: flex; flex-direction: column; gap: 10px;">
+                <div style="display: flex; gap: 10px; align-items: center;">
+                    <button onclick="exportToPDF(false)" style="flex: 1; background: linear-gradient(45deg, #0f3460, #1a5f9e);">
+                        📄 Export PDF
+                    </button>
+                    <button onclick="exportToPDF(true)" style="flex: 1; background: linear-gradient(45deg, #e94560, #ff6b6b);">
+                        📄 Export & Clear
+                    </button>
+                </div>
+                <div id="export-status" style="font-size: 11px; color: #888;"></div>
+                <div id="reports-list" style="font-size: 11px; max-height: 100px; overflow-y: auto;"></div>
+            </div>
+            <button onclick="refreshReports()" style="margin-top: 10px; background: #333; font-size: 11px;">🔄 Refresh Reports</button>
+        </div>
+
+        <div class="module attack-monitor">
+            <h2>⚔️ Attack Monitor</h2>
+            <div class="metrics">
+                <div>Active Targets: <span id="active-targets">{{ attack_metrics.active_targets }}</span></div>
+                <div>Success Rate: <span id="success-rate">{{ "%.2f"|format(attack_metrics.success_rate * 100) }}%</span></div>
+                <div class="attack-stats">
+                    <div>Attack Velocity: <span id="attack-velocity">{{ "%.2f"|format(attack_metrics.attack_velocity) }}</span></div>
+                    <div>Defense Rating: <span id="defense-rating">{{ "%.2f"|format(attack_metrics.defense_rating.overall_rating * 100) }}%</span></div>
+                </div>
+            </div>
+        </div>
+
+        <div class="module findings-panel">
+            <h2>🔍 Threat Findings</h2>
+            <div id="findings-list" class="findings-list">
+                <div class="finding-item">No findings yet. Run a scan to detect threats.</div>
+            </div>
+            <button onclick="refreshFindings()" style="margin-top: 10px;">Refresh Findings</button>
+        </div>
+
+        <div class="module active-modules">
+            <h2>📦 Active Modules</h2>
+            <div id="modules-list" class="modules-grid">
+                {% for module in active_modules %}
+                <div class="module-item" data-name="{{ module.name if module.name else module.module }}">
+                    <div class="module-header">
+                        {{ module.name if module.name else module.module }}
+                        {% if module.status == 'running' %}
+                        <span class="status-badge running">Running</span>
+                        {% else %}
+                        <button class="load-btn" onclick="executeModule('{{ module.name }}')">Execute</button>
+                        {% endif %}
+                    </div>
+                    <div class="module-stats">
+                        {% if module.status == 'running' %}
+                        PID: {{ module.pid }}<br>
+                        CPU: {{ "%.1f"|format(module.cpu) }}%<br>
+                        Memory: {{ "%.2f"|format(module.memory) }} MB
+                        <div class="module-controls">
+                            <button onclick="optimizeModule('{{ module.name }}')">Optimize</button>
+                            <button onclick="restartModule('{{ module.name }}')">Restart</button>
+                        </div>
+                        {% endif %}
+                    </div>
+                </div>
+                {% endfor %}
+            </div>
+        </div>
+    </div>
+
+    <div class="command-console">
+        <input type="text" id="command-input" placeholder="Enter HADES command...">
+        <button onclick="executeCommand()">Execute</button>
+    </div>
+
+    <script src="/static/js/bridge.js"></script>
+    <script>
+        // HADES-specific functions
+        function clearChat() {
+            document.getElementById('chat-messages').innerHTML = '';
+            addChatMessage('System', 'Chat cleared. HADES ready.', 'system');
+        }
+        
+        function quickCommand(cmd) {
+            document.getElementById('chat-input').value = cmd;
+            sendChatMessage();
+        }
+        
+        function runHadesTool() {
+            const target = document.getElementById('tool-target').value;
+            const tool = document.getElementById('tool-select').value;
+            if (target && socket.readyState === WebSocket.OPEN) {
+                addChatMessage('System', `Running ${tool} on ${target}...`, 'system');
+                socket.send(JSON.stringify({ command: 'hades_tool', tool: tool, target: target }));
+            }
+        }
+        
+        function runQuickTool(tool) {
+            const target = document.getElementById('tool-target').value || prompt('Enter target:');
+            if (target) {
+                document.getElementById('tool-target').value = target;
+                document.getElementById('tool-select').value = tool;
+                runHadesTool();
+            }
+        }
+        
+        function scanCache() {
+            addChatMessage('System', 'Initiating browser cache scan...', 'system');
+            socket.send(JSON.stringify({ command: 'hades_scan_cache' }));
+        }
+        
+        function showExploits() {
+            quickCommand('show learned exploits');
+        }
+        
+        function refreshFindings() {
+            fetch('/hades/findings')
+                .then(r => r.json())
+                .then(data => {
+                    const list = document.getElementById('findings-list');
+                    if (data.findings && data.findings.length > 0) {
+                        list.innerHTML = data.findings.map(f => 
+                            `<div class="finding-item ${f.severity.toLowerCase()}">[${f.severity}] ${f.threat_type}: ${f.path.slice(-40)}</div>`
+                        ).join('');
+                    } else {
+                        list.innerHTML = '<div class="finding-item">No findings yet.</div>';
+                    }
+                });
+        }
+        
+        function executeModule(moduleName) {
+            addChatMessage('System', `Executing module: ${moduleName}...`, 'system');
+            socket.send(JSON.stringify({ command: 'execute_module', module_name: moduleName }));
+        }
+        
+        // ========== AUTO RECON FUNCTIONS ==========
+        function startFullScan() {
+            const target = document.getElementById('recon-target').value.trim();
+            if (!target) {
+                alert('Please enter a target URL');
+                return;
+            }
+            
+            // Show progress
+            document.getElementById('recon-progress').style.display = 'block';
+            document.getElementById('recon-results').style.display = 'none';
+            document.getElementById('recon-log').innerHTML = '';
+            document.getElementById('recon-btn').disabled = true;
+            document.getElementById('recon-btn').textContent = '⏳ Scanning...';
+            
+            addChatMessage('System', `🚀 Starting full reconnaissance on ${target}...`, 'system');
+            
+            if (socket.readyState === WebSocket.OPEN) {
+                socket.send(JSON.stringify({ command: 'hades_full_scan', url: target }));
+            } else {
+                // Fallback to REST API
+                fetch('/hades/full-scan', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({ url: target })
+                })
+                .then(r => r.json())
+                .then(data => handleFullScanResult(data.result || data))
+                .catch(err => {
+                    addChatMessage('System', `Error: ${err}`, 'error');
+                    resetReconUI();
+                });
+            }
+        }
+        
+        function handleFullScanResult(result) {
+            document.getElementById('recon-progress').style.display = 'none';
+            document.getElementById('recon-results').style.display = 'block';
+            resetReconUI();
+            
+            if (result.status === 'completed') {
+                const summary = `
+                    <b>Target:</b> ${result.target}<br>
+                    <b>Vulnerabilities Found:</b> ${result.total_vulnerabilities || 0}<br>
+                    <b>Exploits Learned:</b> ${result.exploits_learned || 0}<br>
+                    <b>Duration:</b> ${result.started_at} - ${result.completed_at}<br>
+                `;
+                document.getElementById('recon-summary').innerHTML = summary;
+                
+                // Log scan steps
+                if (result.scans_completed) {
+                    result.scans_completed.forEach(step => {
+                        addChatMessage('HADES', step, 'ai');
+                    });
+                }
+                
+                addChatMessage('HADES', `✅ Scan complete! Found ${result.total_vulnerabilities || 0} potential issues.`, 'ai');
+                refreshFindings();
+            } else {
+                document.getElementById('recon-summary').innerHTML = `<span style="color: #ff6b6b;">Error: ${result.error || 'Scan failed'}</span>`;
+                addChatMessage('System', `Scan error: ${result.error}`, 'error');
+            }
+        }
+        
+        function resetReconUI() {
+            document.getElementById('recon-btn').disabled = false;
+            document.getElementById('recon-btn').textContent = '🚀 GO TO WORK';
+        }
+        
+        // ========== PDF EXPORT FUNCTIONS ==========
+        function exportToPDF(clearAfter) {
+            document.getElementById('export-status').innerHTML = '<span style="color: #ffa500;">⏳ Generating PDF...</span>';
+            
+            if (socket.readyState === WebSocket.OPEN) {
+                socket.send(JSON.stringify({ command: 'hades_export_pdf', clear_after: clearAfter }));
+            } else {
+                fetch('/hades/export-pdf', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({ clear_after: clearAfter })
+                })
+                .then(r => r.json())
+                .then(data => handlePDFExport(data))
+                .catch(err => {
+                    document.getElementById('export-status').innerHTML = `<span style="color: #ff6b6b;">Error: ${err}</span>`;
+                });
+            }
+        }
+        
+        function handlePDFExport(data) {
+            if (data.status === 'success' || data.filename) {
+                const filename = data.filename;
+                const downloadUrl = data.download_url;
+                
+                document.getElementById('export-status').innerHTML = `
+                    <span style="color: #00ff00;">✅ PDF Generated!</span><br>
+                    <a href="${downloadUrl}" target="_blank" style="color: #00fff2;">📥 Download: ${filename}</a>
+                    <br>Exploits: ${data.exploits || 0} | Findings: ${data.findings || 0}
+                    ${data.cleared ? '<br><span style="color: #ffa500;">Data cleared after export</span>' : ''}
+                `;
+                
+                addChatMessage('HADES', `📄 PDF Report generated: ${filename}`, 'ai');
+                refreshReports();
+                
+                if (data.cleared) {
+                    refreshFindings();
+                }
+            } else {
+                document.getElementById('export-status').innerHTML = `<span style="color: #ff6b6b;">Error: ${data.message || 'Export failed'}</span>`;
+            }
+        }
+        
+        function refreshReports() {
+            fetch('/hades/reports')
+                .then(r => r.json())
+                .then(data => {
+                    const list = document.getElementById('reports-list');
+                    if (data.reports && data.reports.length > 0) {
+                        list.innerHTML = data.reports.slice(0, 5).map(r => 
+                            `<div style="padding: 3px; border-bottom: 1px solid #333;">
+                                <a href="${r.download_url}" target="_blank" style="color: #00fff2;">${r.filename}</a>
+                                <span style="color: #666;"> (${(r.size/1024).toFixed(1)}KB)</span>
+                            </div>`
+                        ).join('');
+                    } else {
+                        list.innerHTML = '<div style="color: #666;">No reports yet</div>';
+                    }
+                });
+        }
+        
+        // Load reports on page load
+        document.addEventListener('DOMContentLoaded', function() {
+            refreshReports();
+        });
+    </script>
+</body>
+
+</html>

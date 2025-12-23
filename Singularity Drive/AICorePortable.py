@@ -1,3 +1,9 @@
+"""
+AICorePortable - FastAPI-based AI Core Server
+
+💝 Support Development: https://buy.stripe.com/28EbJ1f7ceo3ckyeES5kk00
+"""
+
 from fastapi.security import APIKeyHeader
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Request, Response
 from fastapi.responses import FileResponse
