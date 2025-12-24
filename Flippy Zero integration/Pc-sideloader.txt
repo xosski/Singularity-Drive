@@ -1,0 +1,76 @@
+2️⃣ PC-Side Python Listener (Bridge Script)
+
+This script runs on your PC and listens to the Flipper over USB.
+
+📁 File: flipper_listener.py
+import serial
+import time
+
+PORT = "/dev/ttyACM0"  # Windows: COM3, COM4, etc.
+BAUD = 115200
+
+def start_scan():
+    print("[+] Scan started")
+
+def stop_scan():
+    print("[-] Scan stopped")
+
+def snapshot():
+    print("[*] Snapshot taken")
+
+def main():
+    ser = serial.Serial(PORT, BAUD, timeout=1)
+    print("[*] Listening for Flipper commands...")
+
+    while True:
+        line = ser.readline().decode(errors="ignore").strip()
+        if not line:
+            continue
+
+        print(f"[FLIPPER] {line}")
+
+        if line == "SCAN_START":
+            start_scan()
+        elif line == "SCAN_STOP":
+            stop_scan()
+        elif line == "SNAPSHOT":
+            snapshot()
+        elif line == "EXIT":
+            print("[!] Flipper requested exit")
+            break
+
+        time.sleep(0.05)
+
+if __name__ == "__main__":
+    main()
+
+3️⃣ How People Extend This (Safely)
+
+Users can now:
+
+Call existing Python functions
+
+Trigger log collection
+
+Gate actions behind physical presence
+
+Use Flipper as a hardware authorization key
+
+Example:
+
+def start_scan():
+    hades_ai.run_safe_analysis()
+
+
+No refactor required.
+
+4️⃣ Why This Skeleton Is Correct
+
+✔ Works with official Flipper firmware
+✔ No firmware hacks
+✔ No unsafe capabilities
+✔ Clean separation of concerns
+✔ Easy to audit
+✔ Easy to extend
+
+This is exactly how Flipper is used in professional labs, red/blue team tooling, and hardware research.

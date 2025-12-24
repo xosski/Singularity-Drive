@@ -1,0 +1,43 @@
+#include <furi.h>
+#include <furi_hal.h>
+#include <gui/gui.h>
+#include <input/input.h>
+
+#define TAG "PC_BRIDGE"
+
+static void send_command(const char* cmd) {
+    furi_hal_usb_cdc_send((uint8_t*)cmd, strlen(cmd));
+    furi_hal_usb_cdc_send((uint8_t*)"\n", 1);
+}
+
+int32_t flipper_pc_bridge_app(void* p) {
+    UNUSED(p);
+
+    // Enable USB CDC
+    furi_hal_usb_set_config(&usb_cdc_single);
+
+    while(true) {
+        InputEvent event;
+        if(furi_hal_input_get_event(&event)) {
+            if(event.type == InputTypePress) {
+                switch(event.key) {
+                    case InputKeyUp:
+                        send_command("SCAN_START");
+                        break;
+                    case InputKeyDown:
+                        send_command("SCAN_STOP");
+                        break;
+                    case InputKeyOk:
+                        send_command("SNAPSHOT");
+                        break;
+                    case InputKeyBack:
+                        send_command("EXIT");
+                        return 0;
+                    default:
+                        break;
+                }
+            }
+        }
+        furi_delay_ms(50);
+    }
+}
