@@ -25,7 +25,7 @@ import socket
 import urllib.parse
 import concurrent.futures
 import urllib3
-
+from urllib.parse import urljoin
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 from PyQt6.QtWidgets import (
@@ -166,151 +166,122 @@ class KnowledgeBase:
         self.conn = sqlite3.connect(db_path, check_same_thread=False)
         self.lock = threading.Lock()
         self._init_db()
-        
     def _init_db(self):
         cursor = self.conn.cursor()
-        
-        cursor.execute('''CREATE TABLE IF NOT EXISTS experiences (
-            id TEXT PRIMARY KEY, input_data TEXT, action_taken TEXT, result TEXT,
-            reward REAL, timestamp TEXT, category TEXT, metadata TEXT)''')
-        
+
         cursor.execute('''CREATE TABLE IF NOT EXISTS security_patterns (
             pattern_id TEXT PRIMARY KEY, pattern_type TEXT, signature TEXT,
             confidence REAL, occurrences INTEGER, examples TEXT,
             countermeasures TEXT, cwe_ids TEXT, cvss_score REAL)''')
-        
-        cursor.execute('''CREATE TABLE IF NOT EXISTS q_values (
-            state_hash TEXT, action TEXT, q_value REAL, update_count INTEGER,
-            PRIMARY KEY (state_hash, action))''')
-        
-        cursor.execute('''CREATE TABLE IF NOT EXISTS cache_entries (
-            id INTEGER PRIMARY KEY AUTOINCREMENT, path TEXT, size INTEGER,
-            modified REAL, file_hash TEXT, file_type TEXT, risk_level TEXT,
-            browser TEXT, content_preview TEXT, scan_time TEXT, metadata TEXT)''')
-        
+
         cursor.execute('''CREATE TABLE IF NOT EXISTS threat_findings (
             id INTEGER PRIMARY KEY AUTOINCREMENT, path TEXT, threat_type TEXT,
             pattern TEXT, severity TEXT, code_snippet TEXT, browser TEXT,
             context TEXT, detected_at TEXT)''')
-        
+
         cursor.execute('''CREATE TABLE IF NOT EXISTS learned_exploits (
             id INTEGER PRIMARY KEY AUTOINCREMENT, source_url TEXT, exploit_type TEXT,
             code TEXT, description TEXT, learned_at TEXT, success_count INTEGER,
             fail_count INTEGER)''')
-        
+
         cursor.execute('''CREATE TABLE IF NOT EXISTS chat_history (
             id INTEGER PRIMARY KEY AUTOINCREMENT, role TEXT, message TEXT,
             timestamp TEXT, context TEXT)''')
-        
+
         cursor.execute('''CREATE TABLE IF NOT EXISTS web_learnings (
             id INTEGER PRIMARY KEY AUTOINCREMENT, url TEXT, content_type TEXT,
             patterns_found TEXT, exploits_found TEXT, learned_at TEXT)''')
-        
-        self.conn.commit()
-        
-    def store_experience(self, exp: Experience):
-        with self.lock:
-            cursor = self.conn.cursor()
-            cursor.execute('INSERT OR REPLACE INTO experiences VALUES (?,?,?,?,?,?,?,?)',
-                (exp.id, exp.input_data, exp.action_taken, exp.result,
-                 exp.reward, exp.timestamp.isoformat(), exp.category, json.dumps(exp.metadata)))
-            self.conn.commit()
-            
-    def get_experiences(self, limit: int = 100) -> List[Experience]:
-        cursor = self.conn.cursor()
-        cursor.execute('SELECT * FROM experiences ORDER BY timestamp DESC LIMIT ?', (limit,))
-        return [Experience(id=r[0], input_data=r[1], action_taken=r[2], result=r[3],
-                          reward=r[4], timestamp=datetime.fromisoformat(r[5]),
-                          category=r[6], metadata=json.loads(r[7])) for r in cursor.fetchall()]
 
-    def update_q_value(self, state_hash: str, action: str, q_value: float):
-        with self.lock:
-            cursor = self.conn.cursor()
-            cursor.execute('''INSERT INTO q_values (state_hash, action, q_value, update_count)
-                VALUES (?, ?, ?, 1) ON CONFLICT(state_hash, action) DO UPDATE SET
-                q_value = ?, update_count = update_count + 1''', (state_hash, action, q_value, q_value))
-            self.conn.commit()
-            
-    def get_q_value(self, state_hash: str, action: str) -> float:
-        cursor = self.conn.cursor()
-        cursor.execute('SELECT q_value FROM q_values WHERE state_hash = ? AND action = ?', (state_hash, action))
-        result = cursor.fetchone()
-        return result[0] if result else 0.0
-    
-    def store_pattern(self, pattern: SecurityPattern):
-        with self.lock:
-            cursor = self.conn.cursor()
-            cursor.execute('INSERT OR REPLACE INTO security_patterns VALUES (?,?,?,?,?,?,?,?,?)',
-                (pattern.pattern_id, pattern.pattern_type, pattern.signature, pattern.confidence,
-                 pattern.occurrences, json.dumps(pattern.examples), json.dumps(pattern.countermeasures),
-                 json.dumps(pattern.cwe_ids), pattern.cvss_score))
-            self.conn.commit()
-            
-    def get_patterns(self) -> List[SecurityPattern]:
+        self.conn.commit()
+    def get_patterns(self) -> List[dict]:
         cursor = self.conn.cursor()
         cursor.execute('SELECT * FROM security_patterns')
-        return [SecurityPattern(pattern_id=r[0], pattern_type=r[1], signature=r[2],
-                               confidence=r[3], occurrences=r[4], examples=json.loads(r[5]),
-                               countermeasures=json.loads(r[6]), cwe_ids=json.loads(r[7]),
-                               cvss_score=r[8]) for r in cursor.fetchall()]
-    
-    def store_threat_finding(self, finding: ThreatFinding):
+        return [
+        {
+        'pattern_id': r[0], 'pattern_type': r[1], 'signature': r[2],
+        'confidence': r[3], 'occurrences': r[4], 'examples': json.loads(r[5]),
+        'countermeasures': json.loads(r[6]), 'cwe_ids': json.loads(r[7]), 'cvss_score': r[8]
+        }
+        for r in cursor.fetchall()
+        ]
+
+
+    def store_threat_finding(self, finding):
         with self.lock:
             cursor = self.conn.cursor()
-            cursor.execute('''INSERT INTO threat_findings 
-                (path, threat_type, pattern, severity, code_snippet, browser, context, detected_at)
-                VALUES (?,?,?,?,?,?,?,?)''',
-                (finding.path, finding.threat_type, finding.pattern, finding.severity,
-                 finding.code_snippet, finding.browser, finding.context, datetime.now().isoformat()))
+            cursor.execute('''INSERT INTO threat_findings
+            (path, threat_type, pattern, severity, code_snippet, browser, context, detected_at)
+            VALUES (?,?,?,?,?,?,?,?)''',
+            (finding.path, finding.threat_type, finding.pattern, finding.severity,
+            finding.code_snippet, finding.browser, finding.context, datetime.now().isoformat()))
             self.conn.commit()
-            
+
+
     def get_threat_findings(self, limit: int = 100) -> List[Dict]:
         cursor = self.conn.cursor()
         cursor.execute('SELECT * FROM threat_findings ORDER BY detected_at DESC LIMIT ?', (limit,))
-        return [{'id': r[0], 'path': r[1], 'threat_type': r[2], 'pattern': r[3],
-                 'severity': r[4], 'code_snippet': r[5], 'browser': r[6],
-                 'context': r[7], 'detected_at': r[8]} for r in cursor.fetchall()]
-    
+        return [
+        {
+        'id': r[0], 'path': r[1], 'threat_type': r[2], 'pattern': r[3],
+        'severity': r[4], 'code_snippet': r[5], 'browser': r[6],
+        'context': r[7], 'detected_at': r[8]
+        }
+        for r in cursor.fetchall()
+        ]
+
+
     def store_learned_exploit(self, source_url: str, exploit_type: str, code: str, description: str):
         with self.lock:
             cursor = self.conn.cursor()
-            cursor.execute('''INSERT INTO learned_exploits 
-                (source_url, exploit_type, code, description, learned_at, success_count, fail_count)
-                VALUES (?,?,?,?,?,0,0)''', (source_url, exploit_type, code, description, datetime.now().isoformat()))
+            cursor.execute('''INSERT INTO learned_exploits
+            (source_url, exploit_type, code, description, learned_at, success_count, fail_count)
+            VALUES (?,?,?,?,?,0,0)''',
+            (source_url, exploit_type, code, description, datetime.now().isoformat()))
             self.conn.commit()
-            
+
+
     def get_learned_exploits(self, limit: int = 50) -> List[Dict]:
         cursor = self.conn.cursor()
         cursor.execute('SELECT * FROM learned_exploits ORDER BY learned_at DESC LIMIT ?', (limit,))
-        return [{'id': r[0], 'source_url': r[1], 'exploit_type': r[2], 'code': r[3],
-                 'description': r[4], 'learned_at': r[5], 'success_count': r[6],
-                 'fail_count': r[7]} for r in cursor.fetchall()]
-    
-    def get_all_learned_exploits(self) -> List[Dict]:
-        cursor = self.conn.cursor()
-        cursor.execute('SELECT * FROM learned_exploits ORDER BY exploit_type, learned_at DESC')
-        return [{'id': r[0], 'source_url': r[1], 'exploit_type': r[2], 'code': r[3],
-                 'description': r[4], 'learned_at': r[5], 'success_count': r[6],
-                 'fail_count': r[7]} for r in cursor.fetchall()]
-    
+        return [
+        {
+        'id': r[0], 'source_url': r[1], 'exploit_type': r[2], 'code': r[3],
+        'description': r[4], 'learned_at': r[5], 'success_count': r[6], 'fail_count': r[7]
+        }
+        for r in cursor.fetchall()
+        ]
+
+
     def store_chat(self, role: str, message: str, context: str = ""):
         with self.lock:
             cursor = self.conn.cursor()
             cursor.execute('INSERT INTO chat_history (role, message, timestamp, context) VALUES (?,?,?,?)',
-                          (role, message, datetime.now().isoformat(), context))
+            (role, message, datetime.now().isoformat(), context))
             self.conn.commit()
-            
+
+
     def get_chat_history(self, limit: int = 50) -> List[Dict]:
         cursor = self.conn.cursor()
         cursor.execute('SELECT role, message, timestamp FROM chat_history ORDER BY id DESC LIMIT ?', (limit,))
-        return [{'role': r[0], 'message': r[1], 'timestamp': r[2]} for r in reversed(cursor.fetchall())]
-    
+        return [
+        {'role': r[0], 'message': r[1], 'timestamp': r[2]} for r in reversed(cursor.fetchall())
+        ]
+
+
     def store_web_learning(self, url: str, content_type: str, patterns: List, exploits: List):
         with self.lock:
             cursor = self.conn.cursor()
-            cursor.execute('''INSERT INTO web_learnings (url, content_type, patterns_found, exploits_found, learned_at)
-                VALUES (?,?,?,?,?)''', (url, content_type, json.dumps(patterns), json.dumps(exploits), datetime.now().isoformat()))
+            cursor.execute('''INSERT INTO web_learnings
+            (url, content_type, patterns_found, exploits_found, learned_at)
+            VALUES (?,?,?,?,?)''',
+            (url, content_type, json.dumps(patterns), json.dumps(exploits), datetime.now().isoformat()))
             self.conn.commit()
+
+
+    def fetch_recent_web_patterns(self, limit=1) -> List[str]:
+        cursor = self.conn.cursor()
+        cursor.execute('SELECT patterns_found FROM web_learnings ORDER BY learned_at DESC LIMIT ?', (limit,))
+        return [json.loads(row[0]) for row in cursor.fetchall() if row[0]]
 
 
 # ============================================================================
@@ -2563,6 +2534,7 @@ class HadesGUI(QMainWindow):
         
         self.tabs.addTab(self._create_chat_tab(), "💬 AI Chat")
         self.tabs.addTab(self._create_network_monitor_tab(), "🛡️ Network Monitor")
+        self.tabs.addTab(self._create_web_knowledge_tab(), "🧠 Web Knowledge")
         self.tabs.addTab(self._create_tools_tab(), "🛠️ Tools & Targets")
         self.tabs.addTab(self._create_exploit_tab(), "⚔️ Active Exploit")
         self.tabs.addTab(self._create_injection_tab(), "💉 Request Injection")
@@ -2572,7 +2544,7 @@ class HadesGUI(QMainWindow):
         self.tabs.addTab(self._create_learned_tab(), "🧠 Learned Exploits")
         self.tabs.addTab(self._create_cache_tab(), "📂 Cache Scanner")
         self.tabs.addTab(self._create_code_tab(), "💻 Code Analysis")
-        
+        self.tabs.addTab(self._create_autorecon_tab(), "🧠 AutoRecon")
         self.status_bar = QStatusBar()
         self.setStatusBar(self.status_bar)
         self.progress = QProgressBar()
@@ -2797,17 +2769,69 @@ class HadesGUI(QMainWindow):
         self.monitor_stop_btn.setEnabled(False)
         self.net_status_label.setText("🔴 Network Monitor STOPPED")
         self._add_chat_message("system", "🔴 Network Monitor stopped")
+    def _create_web_knowledge_tab(self) -> QWidget:
+        widget = QWidget()
+        layout = QVBoxLayout(widget)
+
+        title = QLabel("📡 AI Knowledge From Web Ingestion")
+        title.setFont(QFont("Consolas", 14, QFont.Weight.Bold))
+        title.setStyleSheet("color: #e94560;")
+        layout.addWidget(title)
+
+        self.web_knowledge_display = QTextEdit()
+        self.web_knowledge_display.setReadOnly(True)
+        self.web_knowledge_display.setFont(QFont("Consolas", 11))
+        layout.addWidget(self.web_knowledge_display)
+
+        refresh_btn = QPushButton("🔁 Refresh Web Knowledge")
+        refresh_btn.clicked.connect(self._display_recent_web_knowledge)
+        layout.addWidget(refresh_btn)
+
+        return widget
         
     def _toggle_defense_mode(self, enabled: bool):
         if self.network_monitor:
             self.network_monitor.set_defense_mode(enabled)
         mode = "ENABLED" if enabled else "DISABLED"
         self._add_chat_message("system", f"⚔️ Active Defense Mode {mode}")
-        
+    def _display_recent_web_knowledge(self):
+        recent_patterns = self.ai.kb.fetch_recent_web_patterns(limit=5)
+        if recent_patterns:
+            summary = "\n\n".join(
+                f"[Set {i+1}]\n" + "\n".join(
+                    f"- {p.get('pattern_type', 'Unknown')}: {p.get('signature', '')}" for p in patterns
+                )
+                for i, patterns in enumerate(recent_patterns)
+            )
+        else:
+            summary = "No recent web-based learning data found."
+
+        self.output_display.setPlainText(f"[HadesAI :: Web Knowledge]\n\n{summary}")
     def _toggle_learning_mode(self, enabled: bool):
         if self.network_monitor:
             self.network_monitor.set_learning_mode(enabled)
-            
+    def _create_autorecon_tab(self) -> QWidget:
+        widget = QWidget()
+        layout = QVBoxLayout(widget)
+
+        instructions = QLabel("Enter a URL below and HADES AI will autonomously analyze it for flaws.")
+        instructions.setWordWrap(True)
+        layout.addWidget(instructions)
+
+        self.autorecon_url_input = QLineEdit()
+        self.autorecon_url_input.setPlaceholderText("https://example.com")
+        layout.addWidget(self.autorecon_url_input)
+
+        self.autorecon_start_btn = QPushButton("Start AutoRecon")
+        self.autorecon_start_btn.clicked.connect(self._start_autorecon_scan)
+        layout.addWidget(self.autorecon_start_btn)
+
+        self.autorecon_output = QTextEdit()
+        self.autorecon_output.setReadOnly(True)
+        self.autorecon_output.setFont(QFont("Consolas", 10))
+        layout.addWidget(self.autorecon_output)
+
+        return widget        
     def _on_connection_detected(self, conn: dict):
         row = self.connection_table.rowCount()
         if row >= 100:
@@ -2927,7 +2951,163 @@ class HadesGUI(QMainWindow):
         
         layout.addWidget(right, 2)
         return widget
-        
+    def _start_autorecon_scan(self):
+        import requests
+        from urllib.parse import urlparse, urlencode
+        import hashlib
+
+        url = self.autorecon_url_input.text().strip()
+
+        # ---- URL validation ----
+        if not url.startswith(("http://", "https://")):
+            self.autorecon_output.setPlainText("❌ Please enter a valid URL (http:// or https://).")
+            return
+
+        self.autorecon_output.append(f"🔎 Scanning {url}...\n")
+
+        findings = []
+        patterns = []
+        exploits = []
+
+        headers = {
+            "User-Agent": "HadesAI-AutoRecon/1.0"
+        }
+
+        try:
+            response = requests.get(url, headers=headers, timeout=10)
+            content = response.text[:50000]  # safety limit
+        except Exception as e:
+            self.autorecon_output.append(f"❌ Request failed: {e}")
+            return
+
+        # -------------------------------
+        # 1. Passive HTML / Header Checks
+        # -------------------------------
+        security_headers = [
+            "Content-Security-Policy",
+            "X-Frame-Options",
+            "X-Content-Type-Options",
+            "Strict-Transport-Security",
+            "Referrer-Policy"
+        ]
+
+        missing_headers = [
+            h for h in security_headers if h not in response.headers
+        ]
+
+        if missing_headers:
+            patterns.append({
+                "pattern_type": "Missing Security Headers",
+                "signature": ", ".join(missing_headers),
+                "confidence": 0.6
+            })
+
+            exploits.append({
+                "source_url": url,
+                "exploit_type": "Misconfiguration",
+                "code": "HTTP Response Headers",
+                "description": (
+                    "The following security headers were missing: "
+                    f"{', '.join(missing_headers)}.\n\n"
+                    "Reproduction:\n"
+                    "1. Send a GET request to the site\n"
+                    "2. Inspect response headers\n"
+                    "3. Confirm missing protections"
+                )
+            })
+
+        # -------------------------------
+        # 2. Reflected Input Test (XSS-lite)
+        # -------------------------------
+        test_payload = "<hades_test>"
+        parsed = urlparse(url)
+        test_query = urlencode({"test": test_payload})
+        test_url = f"{parsed.scheme}://{parsed.netloc}{parsed.path}?{test_query}"
+
+        try:
+            test_resp = requests.get(test_url, headers=headers, timeout=10)
+            if test_payload in test_resp.text:
+                patterns.append({
+                    "pattern_type": "Reflected Input",
+                    "signature": test_payload,
+                    "confidence": 0.85
+                })
+
+                exploits.append({
+                    "source_url": test_url,
+                    "exploit_type": "Reflected Input / Potential XSS",
+                    "code": test_payload,
+                    "description": (
+                        "User-supplied input was reflected in the response without sanitization.\n\n"
+                        "Reproduction:\n"
+                        f"1. Navigate to:\n   {test_url}\n"
+                        "2. Observe reflected payload in response body\n"
+                        "3. Replace payload with script to test XSS safely"
+                    )
+                })
+        except:
+            pass
+
+        # -------------------------------
+        # 3. Basic Directory Guessing (passive)
+        # -------------------------------
+        common_paths = ["/admin", "/login", "/backup", "/.git/"]
+        for path in common_paths:
+            try:
+                r = requests.get(url.rstrip("/") + path, headers=headers, timeout=5)
+                if r.status_code in (200, 401, 403):
+                    patterns.append({
+                        "pattern_type": "Exposed Endpoint",
+                        "signature": path,
+                        "confidence": 0.7
+                    })
+
+                    exploits.append({
+                        "source_url": url.rstrip("/") + path,
+                        "exploit_type": "Exposed Endpoint",
+                        "code": path,
+                        "description": (
+                            f"Endpoint {path} is accessible (status {r.status_code}).\n\n"
+                            "Reproduction:\n"
+                            f"1. Visit {url.rstrip('/') + path}\n"
+                            "2. Observe access behavior"
+                        )
+                    })
+            except:
+                continue
+
+        # -------------------------------
+        # 4. Store Results
+        # -------------------------------
+        for e in exploits:
+            self.ai.kb.store_learned_exploit(
+                source_url=e["source_url"],
+                exploit_type=e["exploit_type"],
+                code=e["code"],
+                description=e["description"]
+            )
+
+        if patterns or exploits:
+            self.ai.kb.store_web_learning(
+                url=url,
+                content_type="html",
+                patterns=patterns,
+                exploits=exploits
+            )
+
+        # -------------------------------
+        # 5. Display Results
+        # -------------------------------
+        if not patterns:
+            self.autorecon_output.append("ℹ️ No obvious issues detected.\n")
+        else:
+            for p in patterns:
+                self.autorecon_output.append(
+                    f"[{p['pattern_type']}] {p['signature']} | Confidence: {p['confidence']:.2f}"
+                )
+
+        self.autorecon_output.append("\n✅ Findings stored with reproduction steps.")
+
     def _create_findings_tab(self) -> QWidget:
         widget = QWidget()
         layout = QVBoxLayout(widget)
@@ -3643,7 +3823,19 @@ class HadesGUI(QMainWindow):
             QMessageBox.critical(self, "Export Failed", result.get('error', 'Unknown error'))
         
     # ========== Exploitation Methods ==========
-    
+    def check_xss(url):
+        test_url = f"{url}/?q=<script>alert(1)</script>"
+        try:
+            r = requests.get(test_url, timeout=5)
+            if "<script>alert(1)</script>" in r.text:
+                return {
+                    "pattern_type": "XSS",
+                    "signature": "<script>alert(1)</script>",
+                    "confidence": 0.9
+                }
+        except:
+            pass
+        return None
     def _generate_exploit_payloads(self):
         os_type = self.exploit_os.currentText()
         payload_type = self.exploit_type.currentText()
@@ -3861,7 +4053,78 @@ class HadesGUI(QMainWindow):
                     item = QTreeWidgetItem([vuln_type, 'HIGH', str(line), match.group()[:50]])
                     item.setForeground(0, QColor('#ff6b6b'))
                     self.vuln_tree.addTopLevelItem(item)
+class AutoReconScanner(QThread):
+    progress = pyqtSignal(int)
+    log = pyqtSignal(str)
+    finished = pyqtSignal(list)
 
+    def __init__(self, target_url, kb):
+        super().__init__()
+        self.url = target_url
+        self.kb = kb
+        self._stop = False
+
+    def stop(self):
+        self._stop = True
+
+    def run(self):
+        self.log.emit(f"🔎 Scanning {self.url}...")
+
+        findings = []
+        try:
+            test_vectors = {
+                "XSS": "<script>alert(1)</script>",
+                "Traversal": "../../../../etc/passwd",
+                "SQLi": "' OR 1=1--",
+            }
+
+            for vuln_type, payload in test_vectors.items():
+                if self._stop:
+                    break
+
+                # Example: https://example.com/?vuln_payload
+                test_url = f"{self.url}?test={payload}"
+                try:
+                    r = requests.get(test_url, timeout=5)
+                    if payload in r.text:
+                        finding = {
+                            "type": vuln_type,
+                            "payload": payload,
+                            "url": test_url,
+                            "confidence": 0.9
+                        }
+                        findings.append(finding)
+                        self.log.emit(f"[{vuln_type}] Signature: {payload} | Confidence: 0.90")
+
+                        # Store pattern
+                        pattern = SecurityPattern(
+                            pattern_id=hashlib.sha256(payload.encode()).hexdigest()[:16],
+                            pattern_type=vuln_type,
+                            signature=payload,
+                            confidence=0.9,
+                            occurrences=1,
+                            examples=[payload],
+                            countermeasures=[],
+                            cwe_ids=[]
+                        )
+                        self.kb.store_pattern(pattern)
+
+                        # Store as exploit
+                        self.kb.store_learned_exploit(
+                            source_url=self.url,
+                            exploit_type=vuln_type,
+                            code=payload,
+                            description=f"AutoRecon detected potential {vuln_type} at {test_url} using `{payload}`"
+                        )
+
+                except requests.RequestException:
+                    continue
+
+            self.log.emit("✅ Scan completed and stored.")
+        except Exception as e:
+            self.log.emit(f"❌ Error: {str(e)}")
+
+        self.finished.emit(findings)
 
 def main():
     app = QApplication(sys.argv)
