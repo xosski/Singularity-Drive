@@ -13,6 +13,7 @@ import asyncio
 from concurrent.futures import ThreadPoolExecutor
 import json
 import logging
+from HadesAI import KnowledgeBase, NetworkMonitor, ExploitationEngine
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -136,8 +137,25 @@ async def ask_hades(user_message: str, module_context: dict = None) -> dict:
     except Exception as e:
         logger.error(f"❌ HadesAI Error: {e}")
         return {"response": f"Error: {str(e)}", "action": None}
+class GhostWhisperHadesIntegrator:
+    def __init__(self):
+        self.kb = KnowledgeBase("ghostwhisper_hades.db")
+        self.network_monitor = NetworkMonitor(self.kb)
+        self.exploit_engine = ExploitationEngine()
+    
+    def start_monitoring(self):
+        print("[*] Starting HadesAI Network Monitor...")
+        self.network_monitor.set_learning_mode(True)
+        self.network_monitor.set_defense_mode(True)
+        self.network_monitor.start()
+    
+    def stop_monitoring(self):
+        self.network_monitor.stop()
 
-
+    def run_basic_exploit_check(self, target_url):
+        payloads = self.exploit_engine.generate_payloads("whoami")
+        results = self.exploit_engine.fuzz_parameter(url=target_url, param="cmd", payloads=[p["payload"] for p in payloads])
+        return results
 class AIEngine:
     def __init__(self):
         self.status = "ONLINE"
@@ -1324,6 +1342,12 @@ async def receive_exfil(request: Request):
 os.environ['TF_ENABLE_ONEDNN_OPTS'] = '0'  # Prevent TF warnings
 
 if __name__ == "__main__":
+    gwh = GhostWhisperHadesIntegrator()
+    gwh.start_monitoring()
+
+    target = input("Enter target URL for basic scan: ")
+    report = gwh.run_basic_exploit_check(target)
+    print("Results:", report)
     port_manager = BattleReadyPortManager()
     battle_port = port_manager.secure_port()
     
